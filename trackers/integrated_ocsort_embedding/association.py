@@ -359,7 +359,8 @@ def associate(
             if emb_cost is None:
                 emb_cost = 0
             else:
-                # emb_cost[iou_matrix <= 0.3] = 0
+                # Embedding gating: reject weak appearance matches
+                emb_cost[emb_cost < 0.45] = 0
                 pass
             if not aw_off:
                 w_matrix = compute_aw_new_metric(emb_cost, w_assoc_emb, aw_param)
@@ -367,7 +368,17 @@ def associate(
             else:
                 emb_cost *= w_assoc_emb
 
-            final_cost = -(iou_matrix + angle_diff_cost + emb_cost)
+            # Weighted association costs for DanceTrack
+            motion_weight = 0.8
+            iou_weight = 1.3
+            emb_weight = 1.8
+
+            # Impossible-match rejection: poor appearance cannot match on IoU alone
+            emb_gate = emb_cost.copy() if isinstance(emb_cost, np.ndarray) else None
+            if emb_gate is not None:
+                iou_matrix[emb_gate < 0.35] = 0
+
+            final_cost = -(iou_weight * iou_matrix + motion_weight * angle_diff_cost + emb_weight * emb_cost)
             matched_indices = linear_assignment(final_cost)
     else:
         matched_indices = np.empty(shape=(0, 2))

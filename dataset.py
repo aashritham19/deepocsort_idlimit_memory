@@ -8,7 +8,7 @@ from pycocotools.coco import COCO
 from torchvision import transforms
 
 
-def get_mot_loader(dataset, test, data_dir="data", workers=4, size=(800, 1440)):
+def get_mot_loader(dataset, test, data_dir="data", workers=4, size=(800, 1440), args=None):
     # Different dataset paths
     if dataset == "mot17":
         direc = "mot"
@@ -32,7 +32,7 @@ def get_mot_loader(dataset, test, data_dir="data", workers=4, size=(800, 1440)):
             name = "test"
             annotation = "test.json"
         else:
-            annotation = "val.json"
+            annotation = "train.json"
             name = "val"
     else:
         raise RuntimeError("Specify path here.")
@@ -43,6 +43,7 @@ def get_mot_loader(dataset, test, data_dir="data", workers=4, size=(800, 1440)):
         json_file=annotation,
         img_size=size,
         name=name,
+        args=args,
         preproc=ValTransform(
             rgb_means=(0.485, 0.456, 0.406),
             std=(0.229, 0.224, 0.225),
@@ -73,6 +74,7 @@ class MOTDataset(torch.utils.data.Dataset):
         json_file="train_half.json",
         name="train",
         img_size=(608, 1088),
+        args=None,
         preproc=None,
     ):
         """
@@ -87,14 +89,32 @@ class MOTDataset(torch.utils.data.Dataset):
         self.input_dim = img_size
         self.data_dir = data_dir
         self.json_file = json_file
+        self.name = name
+        self.args = args
 
         self.coco = COCO(os.path.join(self.data_dir, "annotations", self.json_file))
-        self.ids = self.coco.getImgIds()
+
+        valid_ids = []
+        for img_id in self.coco.getImgIds():
+            img_info = self.coco.loadImgs(img_id)[0]
+            seq_name = img_info["file_name"].split("/")[0]
+            seq_path = os.path.join(self.data_dir, self.name, seq_name)
+            if os.path.isdir(seq_path):
+                valid_ids.append(img_id)
+
+        self.ids = valid_ids
+        if hasattr(self, "args") and self.args is not None and getattr(self.args, "sequence", None) is not None:
+            seq_ids = []
+            for img_id in self.ids:
+                img_info = self.coco.loadImgs(img_id)[0]
+                seq_name = img_info["file_name"].split("/")[0]
+                if seq_name == self.args.sequence:
+                    seq_ids.append(img_id)
+            self.ids = seq_ids
         self.class_ids = sorted(self.coco.getCatIds())
         cats = self.coco.loadCats(self.coco.getCatIds())
         self._classes = tuple([c["name"] for c in cats])
         self.annotations = self._load_coco_annotations()
-        self.name = name
         self.img_size = img_size
         self.preproc = preproc
 

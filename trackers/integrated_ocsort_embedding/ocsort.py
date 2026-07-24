@@ -14,6 +14,7 @@ import numpy as np
 from .association import *
 from .embedding import EmbeddingComputer
 from .cmc import CMCComputer
+from .idlimitmemory import IDLimitMemory
 
 
 def k_previous_obs(observations, cur_age, k):
@@ -333,7 +334,7 @@ class OCSort(object):
     def __init__(
         self,
         det_thresh,
-        max_age=30,
+        max_age=90,
         min_hits=3,
         iou_threshold=0.3,
         delta_t=3,
@@ -347,6 +348,7 @@ class OCSort(object):
         aw_off=False,
         new_kf_off=False,
         grid_off=False,
+        memory_off=False,
         **kwargs,
     ):
         """
@@ -357,6 +359,14 @@ class OCSort(object):
         self.iou_threshold = iou_threshold
         self.trackers = []
         self.frame_count = 0
+        self.id_memory = IDLimitMemory(
+            id_limit=kwargs["args"].id_limit,
+            max_memory_age=kwargs["args"].memory_age,
+            max_distance=kwargs["args"].memory_distance,
+            max_embeddings=kwargs["args"].memory_embeddings,
+            emb_weight=kwargs["args"].memory_emb_weight,
+        )
+
         self.det_thresh = det_thresh
         self.delta_t = delta_t
         self.asso_func = ASSO_FUNCS[asso_func]
@@ -373,6 +383,9 @@ class OCSort(object):
         self.aw_off = aw_off
         self.new_kf_off = new_kf_off
         self.grid_off = grid_off
+        self.memory_off = memory_off
+        # instrumentation: count caller-side reuse events
+        self.memory_reuse_events = 0
 
     def update(self, output_results, img_tensor, img_numpy, tag):
         """
@@ -387,6 +400,7 @@ class OCSort(object):
         if not isinstance(output_results, np.ndarray):
             output_results = output_results.cpu().numpy()
         self.frame_count += 1
+        self.id_memory.cleanup(self.frame_count)
         if output_results.shape[1] == 5:
             scores = output_results[:, 4]
             bboxes = output_results[:, :4]
@@ -462,6 +476,9 @@ class OCSort(object):
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
             self.trackers[m[1]].update_emb(dets_embs[m[0]], alpha=dets_alpha[m[0]])
+            # Save active track snapshot periodically (for memory)
+            if not self.memory_off:
+                self.id_memory.save_active_track(self.trackers[m[1]], self.frame_count)
         """
             Second round of associaton by OCR
         """
@@ -490,6 +507,9 @@ class OCSort(object):
                         continue
                     self.trackers[trk_ind].update(dets[det_ind, :])
                     self.trackers[trk_ind].update_emb(dets_embs[det_ind], alpha=dets_alpha[det_ind])
+                    # Save active track snapshot periodically (for memory)
+                    if not self.memory_off:
+                        self.id_memory.save_active_track(self.trackers[trk_ind], self.frame_count)
                     to_remove_det_indices.append(det_ind)
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_dets = np.setdiff1d(unmatched_dets, np.array(to_remove_det_indices))
@@ -500,9 +520,30 @@ class OCSort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
+            reused_id = None
+            if not self.embedding_off and not self.memory_off:
+                active_ids = {t.id for t in self.trackers}
+
+                reused_id = self.id_memory.find_best_memory_match(
+                    dets[i, :4],
+                    dets_embs[i],
+                    self.frame_count,
+                    active_ids,
+                )
+
             trk = KalmanBoxTracker(
-                dets[i, :], delta_t=self.delta_t, emb=dets_embs[i], alpha=dets_alpha[i], new_kf=not self.new_kf_off
+                dets[i, :],
+                delta_t=self.delta_t,
+                emb=dets_embs[i],
+                alpha=dets_alpha[i],
+                new_kf=not self.new_kf_off
             )
+
+            if reused_id is not None:
+                self.id_memory.assign_reused_id(trk, reused_id)
+                self.memory_reuse_events += 1
+                print(f"Reused ID {reused_id} at frame {self.frame_count}")
+
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
@@ -520,6 +561,10 @@ class OCSort(object):
             i -= 1
             # remove dead tracklet
             if trk.time_since_update > self.max_age:
+                self.id_memory.save_deleted_track(
+                    trk,
+                    self.frame_count,
+                )
                 self.trackers.pop(i)
         if len(ret) > 0:
             return np.concatenate(ret)

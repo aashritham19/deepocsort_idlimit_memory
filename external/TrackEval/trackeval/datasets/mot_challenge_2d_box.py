@@ -178,6 +178,7 @@ class MotChallenge2DBox(_BaseDataset):
     def _get_seq_info(self):
         seq_list = []
         seq_lengths = {}
+        self.seq_lengths = seq_lengths
         if self.config["SEQ_INFO"]:
             seq_list = list(self.config["SEQ_INFO"].keys())
             seq_lengths = self.config["SEQ_INFO"]
@@ -209,6 +210,8 @@ class MotChallenge2DBox(_BaseDataset):
                     seqmap_file = os.path.join(
                         self.config["SEQMAP_FOLDER"], self.gt_set + ".txt"
                     )
+            if isinstance(seqmap_file, list):
+                seqmap_file = seqmap_file[0]
             if not os.path.isfile(seqmap_file):
                 print("no seqmap found: " + seqmap_file)
                 raise TrackEvalException(
@@ -223,12 +226,8 @@ class MotChallenge2DBox(_BaseDataset):
                     seq_list.append(seq)
                     ini_file = os.path.join(self.gt_fol, seq, "seqinfo.ini")
                     if not os.path.isfile(ini_file):
-                        raise TrackEvalException(
-                            "ini file does not exist: "
-                            + seq
-                            + "/"
-                            + os.path.basename(ini_file)
-                        )
+                        self.seq_lengths[seq] = None
+                        continue
                     ini_data = configparser.ConfigParser()
                     ini_data.read(ini_file)
                     seq_lengths[seq] = int(ini_data["Sequence"]["seqLength"])

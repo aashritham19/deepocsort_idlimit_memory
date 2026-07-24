@@ -42,9 +42,43 @@ def get_main_args():
     parser.add_argument("--cmc_off", action="store_true")
     parser.add_argument("--aw_off", action="store_true")
     parser.add_argument("--aw_param", type=float, default=0.5)
+    parser.add_argument(
+        "--id-limit",
+        type=int,
+        default=15,
+        help="Maximum reusable ID.",
+    )
+    parser.add_argument(
+        "--memory-age",
+        type=int,
+        default=30,
+        help="Maximum age of deleted-track memory in frames.",
+    )
+    parser.add_argument(
+        "--memory-distance",
+        type=int,
+        default=150,
+        help="Maximum spatial distance for memory matching.",
+    )
+    parser.add_argument(
+        "--memory-embeddings",
+        type=int,
+        default=10,
+        help="Maximum number of embeddings stored per deleted track.",
+    )
+    parser.add_argument(
+        "--memory-emb-weight",
+        type=float,
+        default=0.7,
+        help="Weight for embedding in memory matching (0-1). Set 0 to use IoU only.",
+    )
+    parser.add_argument("--memory-off", action="store_true", help="Disable deleted-track memory reuse entirely.")
+    parser.add_argument("--sequence", type=str, default=None, help="Run only a single DanceTrack sequence")
     parser.add_argument("--new_kf_off", action="store_true")
     parser.add_argument("--grid_off", action="store_true")
     args = parser.parse_args()
+    print("Sequence =", args.sequence)
+    print("Memory off =", args.memory_off)
 
     if args.dataset == "mot17":
         args.result_folder = os.path.join(args.result_folder, "MOT17-val")
@@ -83,7 +117,7 @@ def main():
     else:
         raise RuntimeError("Need to update paths for detector for extra datasets.")
     det = detector.Detector("yolox", detector_path, args.dataset)
-    loader = dataset.get_mot_loader(args.dataset, args.test_dataset, size=size)
+    loader = dataset.get_mot_loader(args.dataset, args.test_dataset, size=size, args=args)
 
     # Set up tracker
     oc_sort_args = dict(
@@ -101,6 +135,7 @@ def main():
         aw_param=args.aw_param,
         new_kf_off=args.new_kf_off,
         grid_off=args.grid_off,
+        memory_off=args.memory_off,
     )
     tracker = tracker_module.ocsort.OCSort(**oc_sort_args)
     results = {}
@@ -126,7 +161,7 @@ def main():
         if frame_id == 1:
             print(f"Initializing tracker for {video_name}")
             print(f"Time spent: {total_time:.3f}, FPS {frame_count / (total_time + 1e-9):.2f}")
-            tracker.dump_cache()
+            # tracker.dump_cache()  # commented out: embedding cache crash
             tracker = tracker_module.ocsort.OCSort(**oc_sort_args)
 
         start_time = time.time()
@@ -147,7 +182,7 @@ def main():
     print(f"Time spent: {total_time:.3f}, FPS {frame_count / (total_time + 1e-9):.2f}")
     # Save detector results
     det.dump_cache()
-    tracker.dump_cache()
+    # tracker.dump_cache()  # commented out: embedding cache crash
 
     # Save for all sequences
     folder = os.path.join(args.result_folder, args.exp_name, "data")
